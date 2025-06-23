@@ -182,10 +182,21 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
 
     mapLandmarksToRobot(poseLandmarks) {
         const POSE = {
+            NOSE: 0,
+            LEFT_EYE_INNER: 1,
+            LEFT_EYE: 2,
+            LEFT_EYE_OUTER: 3,
+            RIGHT_EYE_INNER: 4,
+            RIGHT_EYE: 5,
+            RIGHT_EYE_OUTER: 6,
+            LEFT_EAR: 7,
+            RIGHT_EAR: 8,
             LEFT_SHOULDER: 11,
             LEFT_ELBOW: 13,
             LEFT_WRIST: 15,
-            RIGHT_SHOULDER: 12
+            RIGHT_SHOULDER: 12,
+            RIGHT_ELBOW: 14,
+            RIGHT_WRIST: 16
         };
     
         // Helper functions for 2D operations only
@@ -196,6 +207,16 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
     
         const angle2D = (vec) => Math.atan2(vec.y, vec.x);
         
+        // Function to calculate angle between two vectors (e.g., upper arm and forearm)
+        const angleBetweenVectors = (vec1, vec2) => {
+            const dotProduct = vec1.x * vec2.x + vec1.y * vec2.y;
+            const magnitude1 = vectorMagnitude(vec1);
+            const magnitude2 = vectorMagnitude(vec2);
+            if (magnitude1 === 0 || magnitude2 === 0) return 0; // Avoid division by zero
+            const clampedDotProduct = Math.max(-1, Math.min(1, dotProduct / (magnitude1 * magnitude2)));
+            return Math.acos(clampedDotProduct);
+        };
+    
         const vectorMagnitude = (vec) => Math.hypot(vec.x, vec.y);
     
         // Smoothing
@@ -212,169 +233,349 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         const isValid = (landmark) => landmark && 
             (landmark.visibility === undefined || landmark.visibility > 0.5);
     
+        // --- Left Hand Logic ---
         if (!isValid(poseLandmarks[POSE.LEFT_SHOULDER]) || 
             !isValid(poseLandmarks[POSE.LEFT_ELBOW]) || 
             !isValid(poseLandmarks[POSE.LEFT_WRIST])) {
-            console.warn("Invalid landmarks, using safe 2D position");
+            console.warn("Invalid left hand landmarks, using safe 2D position");
             // Safe 2D position: arm horizontal
             this.viewer?.updateJoint('l_shoulder_x', 0);      // Horizontal
             this.viewer?.updateJoint('l_shoulder_y', 0);      // No front/back
             this.viewer?.updateJoint('l_arm_z', 0);           // No rotation
             this.viewer?.updateJoint('l_elbow_y', 0);         // Set to 0
-            return;
-        }
+        } else {
+            const shoulder = poseLandmarks[POSE.LEFT_SHOULDER];
+            const elbow = poseLandmarks[POSE.LEFT_ELBOW];
+            const wrist = poseLandmarks[POSE.LEFT_WRIST];
     
-        const shoulder = poseLandmarks[POSE.LEFT_SHOULDER];
-        const elbow = poseLandmarks[POSE.LEFT_ELBOW];
-        const wrist = poseLandmarks[POSE.LEFT_WRIST];
+            // === PURE 2D APPROACH ===
+            
+            // 1. Calculate upper arm vector (shoulder to elbow)
+            const upperArmVec = create2DVector(shoulder, elbow);
+            
+            // 2. Calculate forearm vector (elbow to wrist)
+            const forearmVec = create2DVector(elbow, wrist);
     
-        // === PURE 2D APPROACH ===
-        
-        // 1. Calculate upper arm vector (shoulder to elbow)
-        const upperArmVec = create2DVector(shoulder, elbow);
-        
-        // 2. Calculate forearm vector (elbow to wrist)
-        const forearmVec = create2DVector(elbow, wrist);
-    
-        // === SHOULDER X (Up/Down movement) ===
-        // Based on your tested mapping:
-        // Hands up: shoulder_x = 1.5
-        // Hands down: shoulder_x = 1.5  
-        // Hands front: shoulder_x = 1.5
-        // Hands sideways: shoulder_x = 0 (ORIGINAL POSITION)
-        
-        const upperArmAngle = angle2D(upperArmVec);
-        const forearmAngle = angle2D(forearmVec);
-        
-        // Calculate arm segment lengths for heuristic
-        const upperArmLength = vectorMagnitude(upperArmVec);
-        const forearmLength = vectorMagnitude(forearmVec);
-        const totalArmLength = upperArmLength + forearmLength;
-        
-        // Store baseline arm length (use a rolling average for stability)
-        if (!this.armLengthHistory) {
-            this.armLengthHistory = [];
-        }
-        
-        // Add current length to history
-        this.armLengthHistory.push(totalArmLength);
-        if (this.armLengthHistory.length > 20) {
-            this.armLengthHistory.shift(); // Keep only last 20 samples
-        }
-        
-        // Calculate baseline as the maximum length seen (representing full extension sideways)
-        const maxArmLength = Math.max(...this.armLengthHistory);
-        const avgArmLength = this.armLengthHistory.reduce((a, b) => a + b) / this.armLengthHistory.length;
-        
-        // Use max length as baseline (sideways extension should be longest)
-        const baselineLength = maxArmLength;
-        
-        // Calculate length ratio (current length / baseline length)
-        const lengthRatio = totalArmLength / baselineLength;
-        
-        // More conservative threshold - only detect front if significantly shorter
-        const FORESHORTENING_THRESHOLD = 0.75; // Arms must be 25% shorter to be considered "front"
-        
-        let shoulderX = 0; // Start with sideways (original position)
-        let isHandsFront = false;
-        
-        // Check if arms are roughly horizontal
-        const isHorizontal = Math.abs(upperArmAngle) < Math.PI/3; // Within 60 degrees of horizontal (more lenient)
-        
-        // Only consider "front" if significantly shortened AND horizontal
-        if (isHorizontal && lengthRatio < FORESHORTENING_THRESHOLD && this.armLengthHistory.length > 10) {
-            // Arms are horizontal and significantly shortened -> hands front
-            isHandsFront = true;
-            shoulderX = 1.5;
-        } else if (upperArmAngle < -Math.PI/4) { // Upper quadrant (hands up)
-            shoulderX = 1.5;
-        } else if (upperArmAngle > Math.PI/4) { // Lower quadrant (hands down) 
-            shoulderX = 1.5;
-        } else { // Side range (hands sideways) - horizontal but full/normal length
-            shoulderX = 0;
-        }
-        
-        // For smoother transition, use interpolation for non-front positions
-        if (!isHandsFront) {
-            const absAngle = Math.abs(upperArmAngle);
-            if (absAngle > Math.PI/4) {
-                shoulderX = 1.5; // Both up and down use 1.5
-            } else {
-                // Smooth transition from sideways (0) to up/down (1.5)
-                const t = absAngle / (Math.PI/4); // 0 to 1
-                shoulderX = t * 1.5; // Interpolate 0 → 1.5
+            const upperArmAngle = angle2D(upperArmVec);
+            
+            // Calculate arm segment lengths for heuristic
+            const upperArmLength = vectorMagnitude(upperArmVec);
+            const forearmLength = vectorMagnitude(forearmVec);
+            const totalArmLength = upperArmLength + forearmLength;
+            
+            // Store baseline arm length (use a rolling average for stability)
+            if (!this.armLengthHistory_L) {
+                this.armLengthHistory_L = [];
             }
-        }
-        
-        shoulderX = smooth('l_shoulder_x', shoulderX);
-        shoulderX = Math.max(-1.832, Math.min(1.919, shoulderX));
+            
+            // Add current length to history
+            this.armLengthHistory_L.push(totalArmLength);
+            if (this.armLengthHistory_L.length > 20) {
+                this.armLengthHistory_L.shift(); // Keep only last 20 samples
+            }
+            
+            // Calculate baseline as the maximum length seen (representing full extension sideways)
+            const maxArmLength_L = Math.max(...this.armLengthHistory_L);
+            
+            // Calculate length ratio (current length / baseline length)
+            const lengthRatio_L = totalArmLength / maxArmLength_L;
+            
+            const FORESHORTENING_THRESHOLD = 0.75;
+            
+            let shoulderX_L = 0;
+            let isHandsFront_L = false;
+            
+            const isHorizontal_L = Math.abs(upperArmAngle) < Math.PI/3;
+            
+            if (isHorizontal_L && lengthRatio_L < FORESHORTENING_THRESHOLD && this.armLengthHistory_L.length > 10) {
+                isHandsFront_L = true;
+                shoulderX_L = 1.5;
+            } else if (upperArmAngle < -Math.PI/4) {
+                shoulderX_L = 1.5;
+            } else if (upperArmAngle > Math.PI/4) { 
+                shoulderX_L = 1.5;
+            } else {
+                shoulderX_L = 0;
+            }
+            
+            if (!isHandsFront_L) {
+                const absAngle = Math.abs(upperArmAngle);
+                if (absAngle > Math.PI/4) {
+                    shoulderX_L = 1.5;
+                } else {
+                    const t = absAngle / (Math.PI/4);
+                    shoulderX_L = t * 1.5;
+                }
+            }
+            
+            shoulderX_L = smooth('l_shoulder_x', shoulderX_L);
+            shoulderX_L = Math.max(-1.832, Math.min(1.919, shoulderX_L));
     
-        // === SHOULDER Y (Front/Back based on your mapping) ===
-        // Your mapping: Hands up = -1.5, Hands down = +1.5, Hands front = 0, Sideways = 0
-        let shoulderY = 0;
-        
-        if (isHandsFront) {
-            // Hands front position
-            shoulderY = 0;
-        } else if (upperArmAngle < -Math.PI/4) { // Hands up
-            shoulderY = -1.5;
-        } else if (upperArmAngle > Math.PI/4) { // Hands down
-            shoulderY = 1.5;
-        } else { // Hands sideways
-            shoulderY = 0;
-        }
-        
-        // Smooth interpolation for natural movement (only for non-front positions)
-        if (!isHandsFront) {
-            if (upperArmAngle < -Math.PI/4) {
-                shoulderY = -1.5;
+            let shoulderY_L = 0;
+            
+            if (isHandsFront_L) {
+                shoulderY_L = 0;
+            } else if (upperArmAngle < -Math.PI/4) {
+                shoulderY_L = -1.5;
             } else if (upperArmAngle > Math.PI/4) {
-                shoulderY = 1.5;
+                shoulderY_L = 1.5;
             } else {
-                // Interpolate between up (-1.5) and down (+1.5) through sideways (0)
-                const normalizedAngle = upperArmAngle / (Math.PI/4); // -1 to +1
-                shoulderY = normalizedAngle * 1.5; // -1.5 to +1.5
+                shoulderY_L = 0;
+            }
+            
+            if (!isHandsFront_L) {
+                if (upperArmAngle < -Math.PI/4) {
+                    shoulderY_L = -1.5;
+                } else if (upperArmAngle > Math.PI/4) {
+                    shoulderY_L = 1.5;
+                } else {
+                    const normalizedAngle = upperArmAngle / (Math.PI/4);
+                    shoulderY_L = normalizedAngle * 1.5;
+                }
+            }
+            
+            shoulderY_L = smooth('l_shoulder_y', shoulderY_L);
+            shoulderY_L = Math.max(-2.094, Math.min(2.705, shoulderY_L));
+    
+            let armZ_L = 0;
+            armZ_L = smooth('l_arm_z', armZ_L);
+    
+            // === ELBOW Y - Reverted to previous state for left hand ===
+            let elbowY_L = 0;
+            const currentElbowAngle = angleBetweenVectors(upperArmVec, forearmVec);
+            
+            // This was the interpolation logic before the strict 0 or -1.5
+            // Re-using the 90-degree check to start the interpolation towards -1.5
+            if (currentElbowAngle > Math.PI / 2) { 
+                 const bendFactor = (currentElbowAngle - Math.PI / 2) / (Math.PI / 2);
+                 elbowY_L = -1.5 * bendFactor; 
+            } else {
+                elbowY_L = 0; 
+            }
+            
+            elbowY_L = smooth('l_elbow_y', elbowY_L);
+            elbowY_L = Math.max(-2.58308729295, Math.min(0.0174532925199, elbowY_L));
+    
+    
+            // Update robot joints for left hand
+            this.viewer?.updateJoint('l_shoulder_x', shoulderX_L);
+            this.viewer?.updateJoint('l_shoulder_y', shoulderY_L);
+            this.viewer?.updateJoint('l_arm_z', armZ_L);
+            this.viewer?.updateJoint('l_elbow_y', elbowY_L);
+    
+            if (this.debugMode) {
+                console.log('2D Mapping Left Hand:', {
+                    upperArmAngle: (upperArmAngle * 180 / Math.PI).toFixed(1) + '°',
+                    totalArmLength: totalArmLength.toFixed(3),
+                    maxArmLength: (this.armLengthHistory_L ? Math.max(...this.armLengthHistory_L).toFixed(3) : 'N/A'),
+                    lengthRatio: lengthRatio_L.toFixed(3),
+                    isHandsFront: isHandsFront_L,
+                    shoulderX: shoulderX_L.toFixed(3),
+                    shoulderY: shoulderY_L.toFixed(3),
+                    armZ: armZ_L.toFixed(3),
+                    elbowY: elbowY_L.toFixed(3),
+                    currentElbowAngle: (currentElbowAngle * 180 / Math.PI).toFixed(1) + '°'
+                });
             }
         }
-        
-        shoulderY = smooth('l_shoulder_y', shoulderY);
-        shoulderY = Math.max(-2.094, Math.min(2.705, shoulderY));
     
-        // === ARM Z (No rotation in 2D) ===
-        let armZ = 0; // Keep at zero for pure 2D
-        armZ = smooth('l_arm_z', armZ);
+        // --- Right Hand Logic ---
+        if (!isValid(poseLandmarks[POSE.RIGHT_SHOULDER]) || 
+            !isValid(poseLandmarks[POSE.RIGHT_ELBOW]) || 
+            !isValid(poseLandmarks[POSE.RIGHT_WRIST])) {
+            console.warn("Invalid right hand landmarks, using safe 2D position");
+            // Safe 2D position: arm horizontal
+            this.viewer?.updateJoint('r_shoulder_x', 0);      // Horizontal
+            this.viewer?.updateJoint('r_shoulder_y', 0);      // No front/back
+            this.viewer?.updateJoint('r_arm_z', 0);           // No rotation
+            this.viewer?.updateJoint('r_elbow_y', 0);         // Set to 0
+        } else {
+            const shoulder_R = poseLandmarks[POSE.RIGHT_SHOULDER];
+            const elbow_R = poseLandmarks[POSE.RIGHT_ELBOW];
+            const wrist_R = poseLandmarks[POSE.RIGHT_WRIST];
     
-        // === ELBOW Y - SET TO 0 ===
-        // Fixed elbow position at 0 (straight arm)
-        let elbowY = 0;
-        
-        elbowY = smooth('l_elbow_y', elbowY);
-        // No need to clamp since we're keeping it at 0
+            const upperArmVec_R = create2DVector(shoulder_R, elbow_R);
+            const forearmVec_R = create2DVector(elbow_R, wrist_R);
     
-        // Update robot joints
-        this.viewer?.updateJoint('l_shoulder_x', shoulderX);
-        this.viewer?.updateJoint('l_shoulder_y', shoulderY);
-        this.viewer?.updateJoint('l_arm_z', armZ);
-        this.viewer?.updateJoint('l_elbow_y', elbowY);
+            const upperArmAngle_R = angle2D(upperArmVec_R);
+            
+            const upperArmLength_R = vectorMagnitude(upperArmVec_R);
+            const forearmLength_R = vectorMagnitude(forearmVec_R);
+            const totalArmLength_R = upperArmLength_R + forearmLength_R;
+            
+            if (!this.armLengthHistory_R) {
+                this.armLengthHistory_R = [];
+            }
+            
+            this.armLengthHistory_R.push(totalArmLength_R);
+            if (this.armLengthHistory_R.length > 20) {
+                this.armLengthHistory_R.shift();
+            }
+            
+            const maxArmLength_R = Math.max(...this.armLengthHistory_R);
+            const lengthRatio_R = totalArmLength_R / maxArmLength_R;
+            
+            const FORESHORTENING_THRESHOLD = 0.75;
+            
+            let shoulderX_R = 0;
+            let isHandsFront_R = false;
+            
+            const isHorizontal_R = Math.abs(upperArmAngle_R) < Math.PI/3;
+            
+            if (isHorizontal_R && lengthRatio_R < FORESHORTENING_THRESHOLD && this.armLengthHistory_R.length > 10) {
+                isHandsFront_R = true;
+                shoulderX_R = 1.5; // From table: r_shoulder_x (1.5) for Hands Front
+            } else if (upperArmAngle_R < -Math.PI/4) { // Hands up
+                shoulderX_R = 1.5; // From table: r_shoulder_x (1.5) for Hands Up
+            } else if (upperArmAngle_R > Math.PI/4) { // Hands down
+                shoulderX_R = 1.5; // From table: r_shoulder_x (1.5) for Hands Down
+            } else { // Hands sideways
+                shoulderX_R = 0; // From table: r_shoulder_x (0) for Hands Sideways
+            }
     
-        // 2D Debug info
-        if (this.debugMode) {
-            console.log('2D Mapping:', {
-                upperArmAngle: (upperArmAngle * 180 / Math.PI).toFixed(1) + '°',
-                forearmAngle: (forearmAngle * 180 / Math.PI).toFixed(1) + '°',
-                totalArmLength: totalArmLength.toFixed(3),
-                maxArmLength: (this.armLengthHistory ? Math.max(...this.armLengthHistory).toFixed(3) : 'N/A'),
-                lengthRatio: lengthRatio.toFixed(3),
-                samplesCount: this.armLengthHistory ? this.armLengthHistory.length : 0,
-                isHandsFront: isHandsFront,
-                shoulderX: shoulderX.toFixed(3),
-                shoulderY: shoulderY.toFixed(3),
-                elbowY: elbowY.toFixed(3)
-            });
+            if (!isHandsFront_R) {
+                const absAngle = Math.abs(upperArmAngle_R);
+                if (absAngle > Math.PI/4) {
+                    shoulderX_R = 1.5;
+                } else {
+                    const t = absAngle / (Math.PI/4);
+                    shoulderX_R = t * 1.5;
+                }
+            }
+            
+            shoulderX_R = smooth('r_shoulder_x', shoulderX_R);
+            shoulderX_R = Math.max(-1.919, Math.min(1.832, shoulderX_R)); // Right shoulder_x limits
+    
+            let shoulderY_R = 0;
+            
+            if (isHandsFront_R) {
+                shoulderY_R = 0; // From table: r_shoulder_y (0) for Hands Front
+            } else if (upperArmAngle_R < -Math.PI/4) { // Hands up
+                shoulderY_R = 1.5; // From table: r_shoulder_y (1.5) for Hands Up
+            } else if (upperArmAngle_R > Math.PI/4) { // Hands down
+                shoulderY_R = -1.5; // From table: r_shoulder_y (-1.5) for Hands Down
+            } else { // Hands sideways
+                shoulderY_R = 0; // From table: r_shoulder_y (0) for Hands Sideways
+            }
+    
+            if (!isHandsFront_R) {
+                if (upperArmAngle_R < -Math.PI/4) { // Up
+                    shoulderY_R = 1.5;
+                } else if (upperArmAngle_R > Math.PI/4) { // Down
+                    shoulderY_R = -1.5;
+                } else { // Sideways interpolation
+                    const normalizedAngle = upperArmAngle_R / (Math.PI/4); // -1 to +1
+                    shoulderY_R = normalizedAngle * -1.5; // Invert to match r_shoulder_y movement
+                }
+            }
+            
+            shoulderY_R = smooth('r_shoulder_y', shoulderY_R);
+            shoulderY_R = Math.max(-2.705, Math.min(2.094, shoulderY_R)); // Right shoulder_y limits
+    
+            let armZ_R = 0;
+            armZ_R = smooth('r_arm_z', armZ_R);
+    
+            // Right elbow remains at 0 as per previous instructions
+            let elbowY_R = 0; 
+            elbowY_R = smooth('r_elbow_y', elbowY_R);
+    
+            // Update robot joints for right hand
+            this.viewer?.updateJoint('r_shoulder_x', shoulderX_R);
+            this.viewer?.updateJoint('r_shoulder_y', shoulderY_R);
+            this.viewer?.updateJoint('r_arm_z', armZ_R);
+            this.viewer?.updateJoint('r_elbow_y', elbowY_R);
+    
+            if (this.debugMode) {
+                console.log('2D Mapping Right Hand:', {
+                    upperArmAngle: (upperArmAngle_R * 180 / Math.PI).toFixed(1) + '°',
+                    totalArmLength: totalArmLength_R.toFixed(3),
+                    maxArmLength: (this.armLengthHistory_R ? Math.max(...this.armLengthHistory_R).toFixed(3) : 'N/A'),
+                    lengthRatio: lengthRatio_R.toFixed(3),
+                    isHandsFront: isHandsFront_R,
+                    shoulderX: shoulderX_R.toFixed(3),
+                    shoulderY: shoulderY_R.toFixed(3),
+                    armZ: armZ_R.toFixed(3),
+                    elbowY: elbowY_R.toFixed(3)
+                });
+            }
+        }
+    
+        // --- Head Logic ---
+        if (isValid(poseLandmarks[POSE.NOSE]) &&
+            isValid(poseLandmarks[POSE.LEFT_EYE_OUTER]) &&
+            isValid(poseLandmarks[POSE.RIGHT_EYE_OUTER]) &&
+            isValid(poseLandmarks[POSE.LEFT_EAR]) &&
+            isValid(poseLandmarks[POSE.RIGHT_EAR])) {
+    
+            const nose = poseLandmarks[POSE.NOSE];
+            const leftEye = poseLandmarks[POSE.LEFT_EYE_OUTER];
+            const rightEye = poseLandmarks[POSE.RIGHT_EYE_OUTER];
+            const leftEar = poseLandmarks[POSE.LEFT_EAR];
+            const rightEar = poseLandmarks[POSE.RIGHT_EAR];
+    
+            // --- Calculate head_z (Yaw - left/right rotation) ---
+            // Using the horizontal difference between the center of the eyes and the nose
+            // A simple linear mapping for now. Needs calibration.
+            const eyeMidpointX = (leftEye.x + rightEye.x) / 2;
+            // if nose.x > eyeMidpointX, head is turned right (from person's perspective)
+            // if nose.x < eyeMidpointX, head is turned left
+            // head_z: lower="-1.57" (left) upper="1.57" (right)
+            
+            // As MediaPipe's X increases to the right, a nose moved right relative to eye center means looking right.
+            // So, nose.x - eyeMidpointX should map directly to head_z (positive for right, negative for left).
+            const yawMovement = nose.x - eyeMidpointX;
+            const yawSensitivity = 15; // *** CALIBRATE THIS *** (e.g., 2 to 10)
+            let head_z_val = yawMovement * yawSensitivity;
+            
+            // Clamp to URDF limits
+            head_z_val = Math.max(-1.57079632679, Math.min(1.57079632679, head_z_val));
+            head_z_val = smooth('head_z', head_z_val);
+            this.viewer?.updateJoint('head_z', head_z_val);
+    
+            // --- Calculate head_y (Pitch - up/down rotation) ---
+            // Using the vertical difference between the nose and the average vertical position of the eyes.
+            // head_y: lower="-0.785" (down) upper="0.104" (up)
+            // MediaPipe Y increases downwards.
+            // If nose.y > eyeMidpointY, nose is below eyes, means head is tilted down.
+            // If nose.y < eyeMidpointY, nose is above eyes, means head is tilted up.
+            
+            const eyeMidpointY = (leftEye.y + rightEye.y) / 2;
+            const pitchMovement = nose.y - eyeMidpointY;
+            
+            // If pitchMovement is positive (head down), we want a negative head_y value.
+            // If pitchMovement is negative (head up), we want a positive head_y value.
+            const pitchSensitivity = 15; // *** CALIBRATE THIS *** (e.g., 2 to 10)
+            let head_y_val = -pitchMovement * pitchSensitivity; // Invert the movement
+            
+            // Adjust for the robot's default head position if needed.
+            // The URDF has an rpy="-0.349..." which is -20 degrees (downwards tilt).
+            // The upper limit is small (0.104 rad ~ 6 deg), lower is -0.785 rad (~ -45 deg).
+            // So a neutral head might be around 0 for the robot.
+            // You might need to add a small offset here if your neutral head doesn't result in 0
+            // on the robot with these settings. For example:
+            // head_y_val = head_y_val + 0.05; // Small positive offset to bring it up slightly
+    
+            // Clamp to URDF limits
+            head_y_val = Math.max(-0.785398163397, Math.min(0.10471975512, head_y_val));
+            head_y_val = smooth('head_y', head_y_val);
+            this.viewer?.updateJoint('head_y', head_y_val);
+    
+    
+            if (this.debugMode) {
+                console.log('2D Mapping Head:', {
+                    head_z: head_z_val.toFixed(3),
+                    head_y: head_y_val.toFixed(3)
+                });
+            }
+    
+        } else {
+            console.warn("Invalid head landmarks, defaulting head joints to 0.");
+            this.viewer?.updateJoint('head_z', 0);
+            this.viewer?.updateJoint('head_y', 0);
         }
     }
     
-    // Additional helper: Detect specific 2D poses
+    // Additional helper: Detect specific 2D poses (no changes here as it's a generic pose detector)
     detect2DPose(poseLandmarks) {
         const shoulder = poseLandmarks[11];
         const elbow = poseLandmarks[13];
@@ -386,19 +587,15 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         const forearmVec = { x: wrist.x - elbow.x, y: wrist.y - elbow.y };
         const upperArmAngle = Math.atan2(upperArmVec.y, upperArmVec.x);
         
-        // Calculate arm lengths for foreshortening detection
         const upperArmLength = Math.hypot(upperArmVec.x, upperArmVec.y);
         const forearmLength = Math.hypot(forearmVec.x, forearmVec.y);
         const totalArmLength = upperArmLength + forearmLength;
         
-        // Use stored baseline or estimate (this is simplified - in real usage, baseline would be established)
-        const estimatedBaseline = totalArmLength / 0.85; // Assume current might be shortened
+        const estimatedBaseline = totalArmLength / 0.85;
         const lengthRatio = totalArmLength / estimatedBaseline;
         
-        // Convert to degrees for easier understanding
         const angleDeg = upperArmAngle * 180 / Math.PI;
         
-        // Check for hands front position (horizontal + shortened)
         const isHorizontal = Math.abs(angleDeg) < 45;
         const isShortened = lengthRatio < 0.85;
         
@@ -408,5 +605,4 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         else if (Math.abs(angleDeg) < 15) return "hands_sideways";
         else return "transitioning";
     }
-    
 }
