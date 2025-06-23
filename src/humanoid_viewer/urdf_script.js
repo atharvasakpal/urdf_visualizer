@@ -623,19 +623,32 @@ class ProfessionalURDFViewer {
                     } else if (extension === 'dae') {
                         const loader = new THREE.ColladaLoader();
                         // ColladaLoader is async itself, might need a wrapper
-                        // This part demonstrates an async loader within a promise:
                         loader.parse(e.target.result, (collada) => {
-                            // Collada model usually contains a scene with various meshes
                             const meshes = [];
                             collada.scene.traverse((child) => {
-                                if (child.isMesh) {
-                                    meshes.push(child.geometry);
+                                if (child.isMesh && child.geometry) {
+                                    // Ensure it's a BufferGeometry; convert if necessary
+                                    // Although ColladaLoader typically provides BufferGeometry
+                                    meshes.push(child.geometry.isBufferGeometry ? child.geometry : new THREE.BufferGeometry().fromGeometry(child.geometry));
                                 }
                             });
+                            
                             if (meshes.length > 0) {
-                                // Combine geometries if multiple meshes are found, or take the first
-                                // For simplicity, we'll just return the first geometry found.
-                                // A more robust solution might merge them or create a Group.
+                                if (meshes.length > 1) {
+                                    // *** Optimization: Merge multiple geometries into one ***
+                                    // This requires BufferGeometryUtils to be imported.
+                                    try {
+                                        // The parameter for mergeBufferGeometries must be an array of BufferGeometry instances
+                                        const mergedGeometry = THREE.BufferGeometryUtils.mergeBufferGeometries(meshes);
+                                        if (mergedGeometry) {
+                                            resolve(mergedGeometry);
+                                            return;
+                                        }
+                                    } catch (mergeError) {
+                                        console.warn(`Could not merge geometries for DAE file "${file.name}": ${mergeError.message}. Using first mesh only.`);
+                                    }
+                                }
+                                // Fallback to using the first mesh if no merge or only one mesh
                                 resolve(meshes[0]);
                             } else {
                                 reject(new Error(`DAE file "${file.name}" contained no meshes.`));
