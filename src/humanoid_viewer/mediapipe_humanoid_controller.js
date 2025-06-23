@@ -74,13 +74,24 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
 
                     if (result.landmarks && result.landmarks.length > 0) {
                         const poseLandmarks = result.landmarks[0];
+                        // --- NEW: Console log the exact landmark points ---
+                        console.log('Pose Landmarker Points:', poseLandmarks.map((lm, index) => ({
+                            index: index,
+                            x: lm.x.toFixed(4),
+                            y: lm.y.toFixed(4),
+                            z: lm.z ? lm.z.toFixed(4) : 'N/A', // z might be undefined for 2D models
+                            visibility: lm.visibility ? lm.visibility.toFixed(4) : 'N/A' // visibility might be undefined
+                        })));
+                        // --- END NEW ---
                         this.mapLandmarksToRobot(poseLandmarks);
                         this.drawLandmarks(poseLandmarks);
                     } else {
                         this.drawLandmarks([]); // Clear overlay if no pose
+                        console.log('No pose landmarks detected.'); // Log when no pose is detected
                     }
                 } else {
                     this.drawLandmarks([]); // Clear overlay if video is paused/no new frame
+                    // console.log('No new video frame, skipping pose detection.'); // Optional: log if no new frame
                 }
             } catch (error) {
                 console.error("Pose detection error:", error);
@@ -170,222 +181,232 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
 
 
     mapLandmarksToRobot(poseLandmarks) {
-        // MediaPipe Pose Landmark indices (pose_landmarker_heavy model)
-        const POSE_LANDMARKS = {
-            NOSE: 0,
-            LEFT_EYE_INNER: 1, LEFT_EYE: 2, LEFT_EYE_OUTER: 3,
-            RIGHT_EYE_INNER: 4, RIGHT_EYE: 5, RIGHT_EYE_OUTER: 6,
-            LEFT_EAR: 7, RIGHT_EAR: 8,
-            MOUTH_LEFT: 9, MOUTH_RIGHT: 10,
-            LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
-            LEFT_ELBOW: 13, RIGHT_ELBOW: 14,
-            LEFT_WRIST: 15, RIGHT_WRIST: 16,
-            LEFT_PINKY: 17, RIGHT_PINKY: 18,
-            LEFT_INDEX: 19, RIGHT_INDEX: 20,
-            LEFT_THUMB: 21, RIGHT_THUMB: 22,
-            LEFT_HIP: 23, RIGHT_HIP: 24,
-            LEFT_KNEE: 25, RIGHT_KNEE: 26,
-            LEFT_ANKLE: 27, RIGHT_ANKLE: 28,
-            LEFT_HEEL: 29, RIGHT_HEEL: 30,
-            LEFT_FOOT_INDEX: 31, RIGHT_FOOT_INDEX: 32
+        const POSE = {
+            LEFT_SHOULDER: 11,
+            LEFT_ELBOW: 13,
+            LEFT_WRIST: 15,
+            RIGHT_SHOULDER: 12
         };
     
-        // Helper function to create a 3D vector
-        const createVector = (p1, p2) => ({
+        // Helper functions for 2D operations only
+        const create2DVector = (p1, p2) => ({
             x: p2.x - p1.x,
-            y: p2.y - p1.y,
-            z: (p2.z || 0) - (p1.z || 0)
+            y: p2.y - p1.y
         });
-
-        // Helper functions for angle calculations
-        const calculateAngleBetweenVectors = (v1, v2) => {
-            const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
-            const mag1 = Math.sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
-            const mag2 = Math.sqrt(v2.x * v2.x + v2.y * v2.y + v2.z * v2.z);
-            
-            if (mag1 === 0 || mag2 === 0) return 0;
-            
-            return Math.acos(Math.max(-1, Math.min(1, dot / (mag1 * mag2))));
-        };
     
-        const clampAngle = (angle, min, max) => {
-            return Math.max(min, Math.min(max, angle));
-        };
-    
-        // Smoothing function to prevent jittery movements
-        const smoothAngle = (current, target, smoothingFactor = 0.2) => { // Increased smoothingFactor for smoother motion
-            if (current === undefined || current === null) return target;
-            return current + (target - current) * smoothingFactor;
-        };
-    
-        // Extract key landmarks (only those needed for arm control)
-        const landmarks = {
-            leftShoulder: poseLandmarks[POSE_LANDMARKS.LEFT_SHOULDER],
-            rightShoulder: poseLandmarks[POSE_LANDMARKS.RIGHT_SHOULDER],
-            leftElbow: poseLandmarks[POSE_LANDMARKS.LEFT_ELBOW],
-            rightElbow: poseLandmarks[POSE_LANDMARKS.RIGHT_ELBOW],
-            leftWrist: poseLandmarks[POSE_LANDMARKS.LEFT_WRIST],
-            rightWrist: poseLandmarks[POSE_LANDMARKS.RIGHT_WRIST],
-        };
-    
-        // Helper function to update joint with smoothing and clamping
-        const updateJointSmooth = (jointName, targetValue, limits = null) => {
-            let clampedValue = targetValue;
-            if (limits) {
-                clampedValue = clampAngle(targetValue, limits.min, limits.max);
-            }
-            
-            const smoothedValue = smoothAngle(this.previousJointValues[jointName], clampedValue);
-            this.previousJointValues[jointName] = smoothedValue;
-            
-            if (this.viewer && this.viewer.updateJoint) {
-                this.viewer.updateJoint(jointName, smoothedValue);
-            }
-            return smoothedValue;
-        };
-
-        // Separate function to void all non-arm joints for clarity and robustness
-        this.voidAllNonArmJoints = () => {
-            const allRobotJoints = [
-                'head_y', 'head_z',
-                'abs_y', 'abs_x', 'abs_z', 'bust_y', 'bust_x',
-                'l_arm_z', 'r_arm_z', // These are now managed specifically below for 'no movement'
-                'l_hip_y', 'l_hip_x', 'l_knee_y', 'l_ankle_y', 
-                'r_hip_y', 'r_hip_x', 'r_knee_y', 'r_ankle_y'
-            ];
-            allRobotJoints.forEach(jointName => {
-                // Ensure the 'no movement' joints are explicitly set to a tight zero range
-                if (jointName === 'l_arm_z' || jointName === 'r_arm_z') {
-                    updateJointSmooth(jointName, 0, { min: -0.001, max: 0.001 }); // Very small range for 'no movement'
-                } else {
-                    updateJointSmooth(jointName, 0, { min: -0.01, max: 0.01 }); // Set to near zero with tiny range for other voided joints
-                }
-            });
-        };
-
-        // --- VOID ALL NON-ARM JOINTS FIRST ---
-        this.voidAllNonArmJoints();
+        const angle2D = (vec) => Math.atan2(vec.y, vec.x);
         
-        // Check if all required arm landmarks are present. If not, don't update active arm joints.
-        const requiredArmLandmarks = [
-            landmarks.leftShoulder, landmarks.rightShoulder,
-            landmarks.leftElbow, landmarks.rightElbow,
-            landmarks.leftWrist, landmarks.rightWrist
-        ];
-
-        if (requiredArmLandmarks.some(landmark => !landmark)) {
-            console.warn('Some required arm landmarks are missing, skipping active arm joint updates.');
-            return; // Exit if essential arm landmarks are missing
+        const vectorMagnitude = (vec) => Math.hypot(vec.x, vec.y);
+    
+        // Smoothing
+        if (!this.previousJointValues) this.previousJointValues = {};
+        const smooth = (jointName, value, alpha = 0.2) => {
+            if (isNaN(value)) return this.previousJointValues[jointName] || 0;
+            const prev = this.previousJointValues[jointName] ?? value;
+            const smoothed = prev * (1 - alpha) + value * alpha;
+            this.previousJointValues[jointName] = smoothed;
+            return smoothed;
+        };
+    
+        // Landmark validation
+        const isValid = (landmark) => landmark && 
+            (landmark.visibility === undefined || landmark.visibility > 0.5);
+    
+        if (!isValid(poseLandmarks[POSE.LEFT_SHOULDER]) || 
+            !isValid(poseLandmarks[POSE.LEFT_ELBOW]) || 
+            !isValid(poseLandmarks[POSE.LEFT_WRIST])) {
+            console.warn("Invalid landmarks, using safe 2D position");
+            // Safe 2D position: arm horizontal
+            this.viewer?.updateJoint('l_shoulder_x', 0);      // Horizontal
+            this.viewer?.updateJoint('l_shoulder_y', 0);      // No front/back
+            this.viewer?.updateJoint('l_arm_z', 0);           // No rotation
+            this.viewer?.updateJoint('l_elbow_y', 0);         // Set to 0
+            return;
         }
-
-
-        // --- ARM JOINTS (ACTIVE CONTROL) ---
-
-        // Left Arm
-        // l_shoulder_y (shoulder raise/lower/pitch) - angle of upper arm relative to torso.
-        // Range: -1.5 to 1.5
-        const leftUpperArm = createVector(landmarks.leftShoulder, landmarks.leftElbow);
-        // Estimate angle using y and z components relative to a 'straight out' pose
-        // Adjust the offset and scale to fit the -1.5 to 1.5 range
-        let leftShoulderYAngle = Math.atan2(leftUpperArm.y, leftUpperArm.z); 
-        // Initial tuning: Math.PI/2 offset assumes neutral arm is along Z.
-        // We need to re-map this to the -1.5 to 1.5 range.
-        // Example: If straight down is ~0 and straight up is ~PI, and we want -1.5 to 1.5.
-        // A direct mapping might be: scaled_angle = (raw_angle / Math.PI) * 1.5;
-        // However, a simple linear mapping from a segment of atan2's output to [-1.5, 1.5]
-        // or trial-and-error with offset and multiplier is common.
-        // Let's try to map human arm's vertical movement to robot's shoulder_y.
-        // Assuming human arm starts 'down' (shoulder_y close to 0 or negative), and moves up.
-        // The angle needs to be inverted and scaled.
+    
+        const shoulder = poseLandmarks[POSE.LEFT_SHOULDER];
+        const elbow = poseLandmarks[POSE.LEFT_ELBOW];
+        const wrist = poseLandmarks[POSE.LEFT_WRIST];
+    
+        // === PURE 2D APPROACH ===
         
-        // Normalize the Y-coordinate of the elbow relative to the shoulder
-        // Higher Y means arm is raised. Lower Y means arm is down.
-        // The Y coordinate goes from 0 (bottom of screen) to 1 (top of screen).
-        // Let's use the difference in Y-coordinates between elbow and shoulder.
-        // This will give a value typically between -1 and 1.
-        const leftArmDeltaY = (landmarks.leftElbow.y - landmarks.leftShoulder.y);
-        // Map this delta_y to the robot's joint range (-1.5 to 1.5).
-        // A simple linear mapping: input_range_start -> -1.5, input_range_end -> 1.5
-        // Let's assume leftArmDeltaY ranges from approx -0.5 (arm down) to 0.5 (arm up).
-        // mapped_value = ( (input_value - input_min) / (input_max - input_min) ) * (output_max - output_min) + output_min
-        // For -0.5 to 0.5 mapped to -1.5 to 1.5:
-        leftShoulderYAngle = ((leftArmDeltaY + 0.5) / 1.0) * (1.5 - (-1.5)) + (-1.5);
-        // This scaling factor (1.0 for the divisor) and offset (0.5 for deltaY) will need fine-tuning.
-        // A common approach is to find what leftArmDeltaY value corresponds to your desired -1.5 and 1.5 robot joint angles.
-        updateJointSmooth('l_shoulder_y', leftShoulderYAngle, { min: -1.5, max: 1.5 });
-
-
-        // l_shoulder_x (shoulder forward/backward/roll) - based on Z-depth of elbow relative to shoulder.
-        // Range: 0 to 1.5
-        // Positive Z means closer to camera (less depth). Negative Z means further away.
-        // Human arm moving forward, elbow Z relative to shoulder Z should increase (become less negative or more positive).
-        // The original code had: (landmarks.leftElbow.z - landmarks.leftShoulder.z) * 5
-        const leftArmDeltaZ = (landmarks.leftElbow.z - landmarks.leftShoulder.z);
-        // Map leftArmDeltaZ to 0 to 1.5. Assume arm at side (neutral Z diff) maps to 0.
-        // Moving arm forward (positive deltaZ) maps to increasing angle up to 1.5.
-        // Fine-tune the multiplier and offset.
-        let leftShoulderXAngle = leftArmDeltaZ * 3; // Initial guess for sensitivity
-        leftShoulderXAngle = Math.max(0, leftShoulderXAngle); // Ensure it's not negative
-        // If arm pulled back, it might go below 0. We want to clamp it.
-        // You'll need to observe the Z values to determine a good scaling and offset.
-        // Example: If arm at side (neutral) is deltaZ ~ 0, and arm fully forward is deltaZ ~ 0.2
-        // Then (deltaZ / 0.2) * 1.5
-        updateJointSmooth('l_shoulder_x', leftShoulderXAngle, { min: 0, max: 1.5 });
-
-        // l_arm_z (no movement)
-        updateJointSmooth('l_arm_z', 0, { min: -0.001, max: 0.001 });
-
-        // l_elbow_y (elbow bend/pitch) - angle at elbow joint. Full range.
-        const leftForearm = createVector(landmarks.leftElbow, landmarks.leftWrist);
-        const leftElbowAngle = calculateAngleBetweenVectors(leftUpperArm, leftForearm); // Angle between upper arm and forearm
-        // Poppy's elbow_y: lower="-2.58308729295" upper="0.0174532925199"
-        // Math.PI - leftElbowAngle is a common way to invert the angle for a typical human-robot elbow.
-        // The limits already enforce the "full" range.
-        updateJointSmooth('l_elbow_y', Math.PI - leftElbowAngle, { min: -2.58308729295, max: 0.0174532925199 });
-
-
-        // Right Arm (similar logic to left arm, with adjusted min/max for symmetry)
-        const rightUpperArm = createVector(landmarks.rightShoulder, landmarks.rightElbow);
-
-        // r_shoulder_y (Range: -1.5 to 1.5)
-        const rightArmDeltaY = (landmarks.rightElbow.y - landmarks.rightShoulder.y);
-        let rightShoulderYAngle = ((rightArmDeltaY + 0.5) / 1.0) * (1.5 - (-1.5)) + (-1.5);
-        // Note the URDF has axis xyz="-1 0 0" for r_shoulder_y, implying a potential sign inversion for symmetry
-        updateJointSmooth('r_shoulder_y', -rightShoulderYAngle, { min: -1.5, max: 1.5 });
-
-        // r_shoulder_x (Range: 0 to 1.5)
-        const rightArmDeltaZ = (landmarks.rightElbow.z - landmarks.rightShoulder.z);
-        let rightShoulderXAngle = rightArmDeltaZ * 3;
-        rightShoulderXAngle = Math.max(0, rightShoulderXAngle);
-        // Note the URDF has axis xyz="0 0 -1" for r_shoulder_x, implying potential sign inversion.
-        updateJointSmooth('r_shoulder_x', -rightShoulderXAngle, { min: 0, max: 1.5 });
-
-
-        // r_arm_z (no movement)
-        updateJointSmooth('r_arm_z', 0, { min: -0.001, max: 0.001 });
-
-        // r_elbow_y (full range)
-        const rightForearm = createVector(landmarks.rightElbow, landmarks.rightWrist);
-        const rightElbowAngle = calculateAngleBetweenVectors(rightUpperArm, rightForearm);
-        // Poppy's r_elbow_y: lower="-0.0174532925199" upper="2.58308729295"
-        // Note the URDF has axis xyz="-1 0 0" for r_elbow_y, implying potential sign inversion for symmetry.
-        updateJointSmooth('r_elbow_y', -(Math.PI - rightElbowAngle), { min: -0.0174532925199, max: 2.58308729295 });
-
-        // Optional: Log joint updates for debugging (reduced frequency)
-        if (Math.random() < 0.05) { // Only log 5% of the time to reduce console spam
-            console.log('Joint updates applied:', {
-                l_shoulder_y: this.previousJointValues.l_shoulder_y?.toFixed(3),
-                l_shoulder_x: this.previousJointValues.l_shoulder_x?.toFixed(3),
-                l_elbow_y: this.previousJointValues.l_elbow_y?.toFixed(3),
-                r_shoulder_y: this.previousJointValues.r_shoulder_y?.toFixed(3),
-                r_shoulder_x: this.previousJointValues.r_shoulder_x?.toFixed(3),
-                r_elbow_y: this.previousJointValues.r_elbow_y?.toFixed(3),
-                l_arm_z: this.previousJointValues.l_arm_z?.toFixed(3),
-                r_arm_z: this.previousJointValues.r_arm_z?.toFixed(3),
-                // Show a few voided ones to confirm they are 0
-                l_hip_y: this.previousJointValues.l_hip_y?.toFixed(3),
-                head_y: this.previousJointValues.head_y?.toFixed(3)
+        // 1. Calculate upper arm vector (shoulder to elbow)
+        const upperArmVec = create2DVector(shoulder, elbow);
+        
+        // 2. Calculate forearm vector (elbow to wrist)
+        const forearmVec = create2DVector(elbow, wrist);
+    
+        // === SHOULDER X (Up/Down movement) ===
+        // Based on your tested mapping:
+        // Hands up: shoulder_x = 1.5
+        // Hands down: shoulder_x = 1.5  
+        // Hands front: shoulder_x = 1.5
+        // Hands sideways: shoulder_x = 0 (ORIGINAL POSITION)
+        
+        const upperArmAngle = angle2D(upperArmVec);
+        const forearmAngle = angle2D(forearmVec);
+        
+        // Calculate arm segment lengths for heuristic
+        const upperArmLength = vectorMagnitude(upperArmVec);
+        const forearmLength = vectorMagnitude(forearmVec);
+        const totalArmLength = upperArmLength + forearmLength;
+        
+        // Store baseline arm length (use a rolling average for stability)
+        if (!this.armLengthHistory) {
+            this.armLengthHistory = [];
+        }
+        
+        // Add current length to history
+        this.armLengthHistory.push(totalArmLength);
+        if (this.armLengthHistory.length > 20) {
+            this.armLengthHistory.shift(); // Keep only last 20 samples
+        }
+        
+        // Calculate baseline as the maximum length seen (representing full extension sideways)
+        const maxArmLength = Math.max(...this.armLengthHistory);
+        const avgArmLength = this.armLengthHistory.reduce((a, b) => a + b) / this.armLengthHistory.length;
+        
+        // Use max length as baseline (sideways extension should be longest)
+        const baselineLength = maxArmLength;
+        
+        // Calculate length ratio (current length / baseline length)
+        const lengthRatio = totalArmLength / baselineLength;
+        
+        // More conservative threshold - only detect front if significantly shorter
+        const FORESHORTENING_THRESHOLD = 0.75; // Arms must be 25% shorter to be considered "front"
+        
+        let shoulderX = 0; // Start with sideways (original position)
+        let isHandsFront = false;
+        
+        // Check if arms are roughly horizontal
+        const isHorizontal = Math.abs(upperArmAngle) < Math.PI/3; // Within 60 degrees of horizontal (more lenient)
+        
+        // Only consider "front" if significantly shortened AND horizontal
+        if (isHorizontal && lengthRatio < FORESHORTENING_THRESHOLD && this.armLengthHistory.length > 10) {
+            // Arms are horizontal and significantly shortened -> hands front
+            isHandsFront = true;
+            shoulderX = 1.5;
+        } else if (upperArmAngle < -Math.PI/4) { // Upper quadrant (hands up)
+            shoulderX = 1.5;
+        } else if (upperArmAngle > Math.PI/4) { // Lower quadrant (hands down) 
+            shoulderX = 1.5;
+        } else { // Side range (hands sideways) - horizontal but full/normal length
+            shoulderX = 0;
+        }
+        
+        // For smoother transition, use interpolation for non-front positions
+        if (!isHandsFront) {
+            const absAngle = Math.abs(upperArmAngle);
+            if (absAngle > Math.PI/4) {
+                shoulderX = 1.5; // Both up and down use 1.5
+            } else {
+                // Smooth transition from sideways (0) to up/down (1.5)
+                const t = absAngle / (Math.PI/4); // 0 to 1
+                shoulderX = t * 1.5; // Interpolate 0 → 1.5
+            }
+        }
+        
+        shoulderX = smooth('l_shoulder_x', shoulderX);
+        shoulderX = Math.max(-1.832, Math.min(1.919, shoulderX));
+    
+        // === SHOULDER Y (Front/Back based on your mapping) ===
+        // Your mapping: Hands up = -1.5, Hands down = +1.5, Hands front = 0, Sideways = 0
+        let shoulderY = 0;
+        
+        if (isHandsFront) {
+            // Hands front position
+            shoulderY = 0;
+        } else if (upperArmAngle < -Math.PI/4) { // Hands up
+            shoulderY = -1.5;
+        } else if (upperArmAngle > Math.PI/4) { // Hands down
+            shoulderY = 1.5;
+        } else { // Hands sideways
+            shoulderY = 0;
+        }
+        
+        // Smooth interpolation for natural movement (only for non-front positions)
+        if (!isHandsFront) {
+            if (upperArmAngle < -Math.PI/4) {
+                shoulderY = -1.5;
+            } else if (upperArmAngle > Math.PI/4) {
+                shoulderY = 1.5;
+            } else {
+                // Interpolate between up (-1.5) and down (+1.5) through sideways (0)
+                const normalizedAngle = upperArmAngle / (Math.PI/4); // -1 to +1
+                shoulderY = normalizedAngle * 1.5; // -1.5 to +1.5
+            }
+        }
+        
+        shoulderY = smooth('l_shoulder_y', shoulderY);
+        shoulderY = Math.max(-2.094, Math.min(2.705, shoulderY));
+    
+        // === ARM Z (No rotation in 2D) ===
+        let armZ = 0; // Keep at zero for pure 2D
+        armZ = smooth('l_arm_z', armZ);
+    
+        // === ELBOW Y - SET TO 0 ===
+        // Fixed elbow position at 0 (straight arm)
+        let elbowY = 0;
+        
+        elbowY = smooth('l_elbow_y', elbowY);
+        // No need to clamp since we're keeping it at 0
+    
+        // Update robot joints
+        this.viewer?.updateJoint('l_shoulder_x', shoulderX);
+        this.viewer?.updateJoint('l_shoulder_y', shoulderY);
+        this.viewer?.updateJoint('l_arm_z', armZ);
+        this.viewer?.updateJoint('l_elbow_y', elbowY);
+    
+        // 2D Debug info
+        if (this.debugMode) {
+            console.log('2D Mapping:', {
+                upperArmAngle: (upperArmAngle * 180 / Math.PI).toFixed(1) + '°',
+                forearmAngle: (forearmAngle * 180 / Math.PI).toFixed(1) + '°',
+                totalArmLength: totalArmLength.toFixed(3),
+                maxArmLength: (this.armLengthHistory ? Math.max(...this.armLengthHistory).toFixed(3) : 'N/A'),
+                lengthRatio: lengthRatio.toFixed(3),
+                samplesCount: this.armLengthHistory ? this.armLengthHistory.length : 0,
+                isHandsFront: isHandsFront,
+                shoulderX: shoulderX.toFixed(3),
+                shoulderY: shoulderY.toFixed(3),
+                elbowY: elbowY.toFixed(3)
             });
         }
     }
+    
+    // Additional helper: Detect specific 2D poses
+    detect2DPose(poseLandmarks) {
+        const shoulder = poseLandmarks[11];
+        const elbow = poseLandmarks[13];
+        const wrist = poseLandmarks[15];
+        
+        if (!shoulder || !elbow || !wrist) return "unknown";
+        
+        const upperArmVec = { x: elbow.x - shoulder.x, y: elbow.y - shoulder.y };
+        const forearmVec = { x: wrist.x - elbow.x, y: wrist.y - elbow.y };
+        const upperArmAngle = Math.atan2(upperArmVec.y, upperArmVec.x);
+        
+        // Calculate arm lengths for foreshortening detection
+        const upperArmLength = Math.hypot(upperArmVec.x, upperArmVec.y);
+        const forearmLength = Math.hypot(forearmVec.x, forearmVec.y);
+        const totalArmLength = upperArmLength + forearmLength;
+        
+        // Use stored baseline or estimate (this is simplified - in real usage, baseline would be established)
+        const estimatedBaseline = totalArmLength / 0.85; // Assume current might be shortened
+        const lengthRatio = totalArmLength / estimatedBaseline;
+        
+        // Convert to degrees for easier understanding
+        const angleDeg = upperArmAngle * 180 / Math.PI;
+        
+        // Check for hands front position (horizontal + shortened)
+        const isHorizontal = Math.abs(angleDeg) < 45;
+        const isShortened = lengthRatio < 0.85;
+        
+        if (isHorizontal && isShortened) return "hands_front";
+        else if (angleDeg < -45) return "hands_up";
+        else if (angleDeg > 45) return "hands_down";
+        else if (Math.abs(angleDeg) < 15) return "hands_sideways";
+        else return "transitioning";
+    }
+    
 }
