@@ -117,13 +117,8 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         const scaleX = this.overlayCanvas.width;
         const scaleY = this.overlayCanvas.height;
 
-        // Define connections for the pose skeleton
+        // Define connections for the specific body parts (Hands/Arms and Head)
         const connections = [
-            // Torso
-            [11, 12], // Shoulders
-            [23, 24], // Hips
-            [11, 23], [12, 24], // Left and Right torso connections
-
             // Left Arm
             [11, 13], [13, 15], // Shoulder to Elbow to Wrist
             [15, 17], [17, 19], [19, 21], // Wrist to Pinky, Index, Thumb (simplified connections)
@@ -132,20 +127,25 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             [12, 14], [14, 16], // Shoulder to Elbow to Wrist
             [16, 18], [18, 20], [20, 22], // Wrist to Pinky, Index, Thumb (simplified connections)
             
-            // Left Leg
-            [23, 25], [25, 27], // Hip to Knee to Ankle
-            [27, 29], [29, 31], [31, 27], // Ankle to Heel, Heel to Foot Index, Foot Index to Ankle
-            
-            // Right Leg
-            [24, 26], [26, 28], // Hip to Knee to Ankle
-            [28, 30], [30, 32], [32, 28], // Ankle to Heel, Heel to Foot Index, Foot Index to Ankle
-
-            // Face (if included in the heavy model and you wish to draw them)
+            // Head (simplified connections for visibility)
             [0, 1], [0, 4], // Nose to eyes
             [1, 2], [2, 3], // Left eye connections
             [4, 5], [5, 6], // Right eye connections
-            [9, 10] // Mouth
+            [9, 10] // Mouth (if present and desired)
         ];
+
+        // Define the indices of landmarks to draw (Hands/Arms and Head)
+        const landmarksToDrawIndices = new Set([
+            0, // Nose
+            1, 2, 3, // Left Eye
+            4, 5, 6, // Right Eye
+            7, 8, // Ears
+            9, 10, // Mouth (if present)
+            11, 12, // Shoulders
+            13, 14, // Elbows
+            15, 16, // Wrists
+            17, 18, 19, 20, 21, 22 // Hand points
+        ]);
 
         this.overlayCtx.strokeStyle = '#33aaff'; // A vibrant blue for lines
         this.overlayCtx.lineWidth = 5; // Increased line width for connections
@@ -153,7 +153,8 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             const start = landmarks[connection[0]];
             const end = landmarks[connection[1]];
             
-            if (start && end) {
+            // Only draw connection if both landmarks are in our desired set
+            if (start && end && landmarksToDrawIndices.has(connection[0]) && landmarksToDrawIndices.has(connection[1])) {
                 this.overlayCtx.beginPath();
                 this.overlayCtx.moveTo(start.x * scaleX, start.y * scaleY);
                 this.overlayCtx.lineTo(end.x * scaleX, end.y * scaleY);
@@ -161,24 +162,30 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             }
         }
 
-        // Draw landmarks (points)
+        // Draw only specific landmarks (points)
         this.overlayCtx.fillStyle = '#FF4136'; // Red for landmarks
         this.overlayCtx.strokeStyle = '#FFFFFF'; // White border
         this.overlayCtx.lineWidth = 2; // Increased line width for landmark borders
         for (let i = 0; i < landmarks.length; i++) {
-            const x = landmarks[i].x * scaleX;
-            const y = landmarks[i].y * scaleY;
-            
-            this.overlayCtx.beginPath();
-            this.overlayCtx.arc(x, y, 7, 0, 2 * Math.PI); // Increased radius for landmarks
-            this.overlayCtx.fill();
-            this.overlayCtx.stroke(); // Draw border
+            if (landmarksToDrawIndices.has(i)) { // Only draw if index is in our allowed set
+                const x = landmarks[i].x * scaleX;
+                const y = landmarks[i].y * scaleY;
+                
+                this.overlayCtx.beginPath();
+                this.overlayCtx.arc(x, y, 7, 0, 2 * Math.PI); // Increased radius for landmarks
+                this.overlayCtx.fill();
+                this.overlayCtx.stroke(); // Draw border
+            }
         }
 
         // Restore the canvas state
         this.overlayCtx.restore();
     }
 
+
+    // ... (previous code remains the same until mapLandmarksToRobot)
+
+    // ... (previous code remains the same until mapLandmarksToRobot)
 
     mapLandmarksToRobot(poseLandmarks) {
         const POSE = {
@@ -208,6 +215,7 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         const angle2D = (vec) => Math.atan2(vec.y, vec.x);
         
         // Function to calculate angle between two vectors (e.g., upper arm and forearm)
+        // This calculates the internal angle at the elbow.
         const angleBetweenVectors = (vec1, vec2) => {
             const dotProduct = vec1.x * vec2.x + vec1.y * vec2.y;
             const magnitude1 = vectorMagnitude(vec1);
@@ -222,7 +230,7 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         // Smoothing
         if (!this.previousJointValues) this.previousJointValues = {};
         const smooth = (jointName, value, alpha = 0.2) => {
-            if (isNaN(value)) return this.previousJointValues[jointName] || 0;
+            if (isNaN(value)) return this.previousJointValues[jointName] || (value || 0); // Handle initial NaN and provide a default
             const prev = this.previousJointValues[jointName] ?? value;
             const smoothed = prev * (1 - alpha) + value * alpha;
             this.previousJointValues[jointName] = smoothed;
@@ -239,10 +247,10 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             !isValid(poseLandmarks[POSE.LEFT_WRIST])) {
             console.warn("Invalid left hand landmarks, using safe 2D position");
             // Safe 2D position: arm horizontal
-            this.viewer?.updateJoint('l_shoulder_x', 0);      // Horizontal
-            this.viewer?.updateJoint('l_shoulder_y', 0);      // No front/back
-            this.viewer?.updateJoint('l_arm_z', 0);           // No rotation
-            this.viewer?.updateJoint('l_elbow_y', 0);         // Set to 0
+            this.viewer?.updateJoint('l_shoulder_x', 0);       // Horizontal
+            this.viewer?.updateJoint('l_shoulder_y', 0);       // No front/back
+            this.viewer?.updateJoint('l_arm_z', 0);             // No rotation
+            this.viewer?.updateJoint('l_elbow_y', 0.02); // Set to default/straight for left elbow
         } else {
             const shoulder = poseLandmarks[POSE.LEFT_SHOULDER];
             const elbow = poseLandmarks[POSE.LEFT_ELBOW];
@@ -340,22 +348,25 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             let armZ_L = 0;
             armZ_L = smooth('l_arm_z', armZ_L);
     
-            // === ELBOW Y - Reverted to previous state for left hand ===
+            // === LEFT ELBOW Y LOGIC (Corrected for inversion) ===
             let elbowY_L = 0;
-            const currentElbowAngle = angleBetweenVectors(upperArmVec, forearmVec);
+            const currentElbowAngle_L = angleBetweenVectors(upperArmVec, forearmVec); // Angle at human elbow
             
-            // This was the interpolation logic before the strict 0 or -1.5
-            // Re-using the 90-degree check to start the interpolation towards -1.5
-            if (currentElbowAngle > Math.PI / 2) { 
-                 const bendFactor = (currentElbowAngle - Math.PI / 2) / (Math.PI / 2);
-                 elbowY_L = -1.5 * bendFactor; 
-            } else {
-                elbowY_L = 0; 
-            }
+            // Robot l_elbow_y: -2.58 (bent) to 0.02 (straight)
+            // Human Angle: PI (straight) to 0 (bent)
+            // We need to map:
+            // Human PI (straight) -> Robot -2.58 (bent)
+            // Human 0 (bent) -> Robot 0.02 (straight)
+
+            // Calculate slope and intercept for this inverted mapping
+            // Points: (Math.PI, -2.58) and (0, 0.02)
+            // Slope m = (0.02 - (-2.58)) / (0 - Math.PI) = 2.6 / -Math.PI = -2.6 / Math.PI
+            // Intercept b = 0.02 (when currentElbowAngle_L is 0)
             
+            elbowY_L = (-2.6 / Math.PI) * currentElbowAngle_L + 0.02;
+
             elbowY_L = smooth('l_elbow_y', elbowY_L);
-            elbowY_L = Math.max(-2.58308729295, Math.min(0.0174532925199, elbowY_L));
-    
+            elbowY_L = Math.max(-2.58, Math.min(0.02, elbowY_L)); // Clamp to robot's actual limits
     
             // Update robot joints for left hand
             this.viewer?.updateJoint('l_shoulder_x', shoulderX_L);
@@ -374,7 +385,7 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
                     shoulderY: shoulderY_L.toFixed(3),
                     armZ: armZ_L.toFixed(3),
                     elbowY: elbowY_L.toFixed(3),
-                    currentElbowAngle: (currentElbowAngle * 180 / Math.PI).toFixed(1) + '°'
+                    currentElbowAngle: (currentElbowAngle_L * 180 / Math.PI).toFixed(1) + '°'
                 });
             }
         }
@@ -385,10 +396,10 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             !isValid(poseLandmarks[POSE.RIGHT_WRIST])) {
             console.warn("Invalid right hand landmarks, using safe 2D position");
             // Safe 2D position: arm horizontal
-            this.viewer?.updateJoint('r_shoulder_x', 0);      // Horizontal
-            this.viewer?.updateJoint('r_shoulder_y', 0);      // No front/back
-            this.viewer?.updateJoint('r_arm_z', 0);           // No rotation
-            this.viewer?.updateJoint('r_elbow_y', 0);         // Set to 0
+            this.viewer?.updateJoint('r_shoulder_x', 0);       // Horizontal
+            this.viewer?.updateJoint('r_shoulder_y', 0);       // No front/back
+            this.viewer?.updateJoint('r_arm_z', 0);             // No rotation
+            this.viewer?.updateJoint('r_elbow_y', -0.02); // Set to default/straight for right elbow
         } else {
             const shoulder_R = poseLandmarks[POSE.RIGHT_SHOULDER];
             const elbow_R = poseLandmarks[POSE.RIGHT_ELBOW];
@@ -475,9 +486,25 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             let armZ_R = 0;
             armZ_R = smooth('r_arm_z', armZ_R);
     
-            // Right elbow remains at 0 as per previous instructions
+            // === RIGHT ELBOW Y LOGIC (Corrected for inversion) ===
             let elbowY_R = 0; 
+            const currentElbowAngle_R = angleBetweenVectors(upperArmVec_R, forearmVec_R); // Angle at human elbow
+
+            // Robot r_elbow_y: -0.02 (straight) to 2.58 (bent)
+            // Human Angle: PI (straight) to 0 (bent)
+            // We need to map:
+            // Human PI (straight) -> Robot 2.58 (bent)
+            // Human 0 (bent) -> Robot -0.02 (straight)
+
+            // Calculate slope and intercept for this inverted mapping
+            // Points: (Math.PI, 2.58) and (0, -0.02)
+            // Slope m = (-0.02 - 2.58) / (0 - Math.PI) = -2.6 / -Math.PI = 2.6 / Math.PI
+            // Intercept b = -0.02 (when currentElbowAngle_R is 0)
+            
+            elbowY_R = (2.6 / Math.PI) * currentElbowAngle_R - 0.02;
+            
             elbowY_R = smooth('r_elbow_y', elbowY_R);
+            elbowY_R = Math.max(-0.02, Math.min(2.58, elbowY_R)); // Clamp to robot's actual limits
     
             // Update robot joints for right hand
             this.viewer?.updateJoint('r_shoulder_x', shoulderX_R);
@@ -510,19 +537,13 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
             const nose = poseLandmarks[POSE.NOSE];
             const leftEye = poseLandmarks[POSE.LEFT_EYE_OUTER];
             const rightEye = poseLandmarks[POSE.RIGHT_EYE_OUTER];
-            const leftEar = poseLandmarks[POSE.LEFT_EAR];
-            const rightEar = poseLandmarks[POSE.RIGHT_EAR];
+            // Ears are checked for validity but not directly used in the calculations below.
+            // const leftEar = poseLandmarks[POSE.LEFT_EAR];
+            // const rightEar = poseLandmarks[POSE.RIGHT_EAR];
     
             // --- Calculate head_z (Yaw - left/right rotation) ---
             // Using the horizontal difference between the center of the eyes and the nose
-            // A simple linear mapping for now. Needs calibration.
             const eyeMidpointX = (leftEye.x + rightEye.x) / 2;
-            // if nose.x > eyeMidpointX, head is turned right (from person's perspective)
-            // if nose.x < eyeMidpointX, head is turned left
-            // head_z: lower="-1.57" (left) upper="1.57" (right)
-            
-            // As MediaPipe's X increases to the right, a nose moved right relative to eye center means looking right.
-            // So, nose.x - eyeMidpointX should map directly to head_z (positive for right, negative for left).
             const yawMovement = nose.x - eyeMidpointX;
             const yawSensitivity = 15; // *** CALIBRATE THIS *** (e.g., 2 to 10)
             let head_z_val = yawMovement * yawSensitivity;
@@ -534,27 +555,12 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
     
             // --- Calculate head_y (Pitch - up/down rotation) ---
             // Using the vertical difference between the nose and the average vertical position of the eyes.
-            // head_y: lower="-0.785" (down) upper="0.104" (up)
-            // MediaPipe Y increases downwards.
-            // If nose.y > eyeMidpointY, nose is below eyes, means head is tilted down.
-            // If nose.y < eyeMidpointY, nose is above eyes, means head is tilted up.
-            
             const eyeMidpointY = (leftEye.y + rightEye.y) / 2;
             const pitchMovement = nose.y - eyeMidpointY;
             
-            // If pitchMovement is positive (head down), we want a negative head_y value.
-            // If pitchMovement is negative (head up), we want a positive head_y value.
             const pitchSensitivity = 15; // *** CALIBRATE THIS *** (e.g., 2 to 10)
             let head_y_val = -pitchMovement * pitchSensitivity; // Invert the movement
             
-            // Adjust for the robot's default head position if needed.
-            // The URDF has an rpy="-0.349..." which is -20 degrees (downwards tilt).
-            // The upper limit is small (0.104 rad ~ 6 deg), lower is -0.785 rad (~ -45 deg).
-            // So a neutral head might be around 0 for the robot.
-            // You might need to add a small offset here if your neutral head doesn't result in 0
-            // on the robot with these settings. For example:
-            // head_y_val = head_y_val + 0.05; // Small positive offset to bring it up slightly
-    
             // Clamp to URDF limits
             head_y_val = Math.max(-0.785398163397, Math.min(0.10471975512, head_y_val));
             head_y_val = smooth('head_y', head_y_val);
@@ -575,6 +581,9 @@ export class MediaPipeHandController { // This should ideally be MediaPipePoseCo
         }
     }
     
+// ... (rest of the code remains the same)
+    
+// ... (rest of the code remains the same)
     // Additional helper: Detect specific 2D poses (no changes here as it's a generic pose detector)
     detect2DPose(poseLandmarks) {
         const shoulder = poseLandmarks[11];
