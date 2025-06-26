@@ -293,7 +293,15 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             LEFT_WRIST: 15,
             RIGHT_SHOULDER: 12,
             RIGHT_ELBOW: 14,
-            RIGHT_WRIST: 16
+            RIGHT_WRIST: 16,
+            LEFT_HIP: 23,
+            RIGHT_HIP: 24,
+            LEFT_KNEE: 25,
+            RIGHT_KNEE: 26,
+            LEFT_ANKLE: 27,
+            RIGHT_ANKLE: 28,
+            LEFT_FOOT_INDEX: 31,
+            RIGHT_FOOT_INDEX: 32
         };
     
         // Helper functions for 2D operations only
@@ -641,6 +649,120 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             if (this.debugMode) console.warn("Invalid head landmarks, defaulting head joints to initial pose.");
             this.viewer?.updateJoint('head_z', this.initialRobotPose.head_z);
             this.viewer?.updateJoint('head_y', this.initialRobotPose.head_y);
+        }
+
+        // --- Right Leg Logic (Hip and Knee) ---
+        if (!isValid(poseLandmarks[POSE.RIGHT_HIP]) ||
+            !isValid(poseLandmarks[POSE.RIGHT_KNEE]) ||
+            !isValid(poseLandmarks[POSE.RIGHT_ANKLE])) {
+            if (this.debugMode) console.warn("Invalid right leg landmarks, defaulting to initial pose for right leg.");
+            this.viewer?.updateJoint('r_hip_y', this.initialRobotPose.r_hip_y);
+            this.viewer?.updateJoint('r_knee_y', this.initialRobotPose.r_knee_y);
+        } else {
+            const r_hip = poseLandmarks[POSE.RIGHT_HIP];
+            const r_knee = poseLandmarks[POSE.RIGHT_KNEE];
+            const r_ankle = poseLandmarks[POSE.RIGHT_ANKLE];
+
+            if (this.debugMode) {
+                console.groupCollapsed('Right Leg Debug (Raw Landmarks)');
+                console.log(`R_Hip (24): x:${r_hip.x.toFixed(4)}, y:${r_hip.y.toFixed(4)}, z:${r_hip.z ? r_hip.z.toFixed(4) : 'N/A'}, vis:${r_hip.visibility ? r_hip.visibility.toFixed(4) : 'N/A'}`);
+                console.log(`R_Knee (26): x:${r_knee.x.toFixed(4)}, y:${r_knee.y.toFixed(4)}, z:${r_knee.z ? r_knee.z.toFixed(4) : 'N/A'}, vis:${r_knee.visibility ? r_knee.visibility.toFixed(4) : 'N/A'}`);
+                console.log(`R_Ankle (28): x:${r_ankle.x.toFixed(4)}, y:${r_ankle.y.toFixed(4)}, z:${r_ankle.z ? r_ankle.z.toFixed(4) : 'N/A'}, vis:${r_ankle.visibility ? r_ankle.visibility.toFixed(4) : 'N/A'}`);
+                console.groupEnd();
+            }
+
+            // Hip_y: Controls thigh rotation (front/back)
+            // Use the vertical position of the hip relative to a baseline (e.g., shoulder) or use thigh vector angle.
+            // For now, let's use the difference in y between hip and knee, scaled.
+            // This might need more sophisticated mapping if you want to control rotation of hip.
+            let r_hip_y_val = 0; // Default or simple mapping
+
+            // Femur vector (hip to knee)
+            const femurVec_R = create2DVector(r_hip, r_knee);
+            // Tibia vector (knee to ankle)
+            const tibiaVec_R = create2DVector(r_knee, r_ankle);
+
+            // r_knee_y: Controls the knee bend.
+            // A straight leg is represented by r_knee_y = 0.
+            // As the knee bends backward, r_knee_y should become more negative (down to -1.5 for "knee back").
+
+            const currentKneeAngle_R = angleBetweenVectors(femurVec_R, tibiaVec_R); // Angle at human knee (radians)
+            
+            // For a straight leg, currentKneeAngle_R will be close to 0 radians (vectors point in same direction).
+            // As the knee bends backward, currentKneeAngle_R will increase.
+            // We want to map currentKneeAngle_R from 0 to some MAX_BEND_ANGLE_HUMAN to 0 to -1.5 for robot.
+
+            // A typical maximum human knee bend is around 140-150 degrees (approx 2.4-2.6 radians).
+            // Let's use 2.5 radians as a plausible max bend for scaling.
+            const MAX_HUMAN_KNEE_BEND_RADIANS = 2.5; // Tune this value as needed
+
+            // The mapping should be:
+            // When currentKneeAngle_R = 0, r_knee_y_val = 0
+            // When currentKneeAngle_R = MAX_HUMAN_KNEE_BEND_RADIANS, r_knee_y_val = -1.5
+            let r_knee_y_val = -(currentKneeAngle_R / MAX_HUMAN_KNEE_BEND_RADIANS) * 1.5; 
+
+            // Ensure the value does not go below the minimum limit (-1.5) and not above 0 (straight)
+            r_knee_y_val = Math.max(-1.5, Math.min(0, r_knee_y_val));
+            r_knee_y_val = smooth('r_knee_y', r_knee_y_val);
+            this.viewer?.updateJoint('r_knee_y', r_knee_y_val);
+
+            // Update robot joints for right leg
+            this.viewer?.updateJoint('r_hip_y', r_hip_y_val); // Only setting to 0 for now, implement actual mapping for hip_y
+            // r_knee_y is updated above
+
+            if (this.debugMode) {
+                console.log('Right Leg Results (Smoothed):', {
+                    r_hip_y: r_hip_y_val.toFixed(3),
+                    r_knee_y: r_knee_y_val.toFixed(3),
+                    currentKneeAngle: (currentKneeAngle_R * 180 / Math.PI).toFixed(1) + '°'
+                });
+            }
+        }
+
+        // --- Left Leg Logic (Hip and Knee) ---
+        if (!isValid(poseLandmarks[POSE.LEFT_HIP]) ||
+            !isValid(poseLandmarks[POSE.LEFT_KNEE]) ||
+            !isValid(poseLandmarks[POSE.LEFT_ANKLE])) {
+            if (this.debugMode) console.warn("Invalid left leg landmarks, defaulting to initial pose for left leg.");
+            this.viewer?.updateJoint('l_hip_y', this.initialRobotPose.l_hip_y);
+            this.viewer?.updateJoint('l_knee_y', this.initialRobotPose.l_knee_y);
+        } else {
+            const l_hip = poseLandmarks[POSE.LEFT_HIP];
+            const l_knee = poseLandmarks[POSE.LEFT_KNEE];
+            const l_ankle = poseLandmarks[POSE.LEFT_ANKLE];
+
+            if (this.debugMode) {
+                console.groupCollapsed('Left Leg Debug (Raw Landmarks)');
+                console.log(`L_Hip (23): x:${l_hip.x.toFixed(4)}, y:${l_hip.y.toFixed(4)}, z:${l_hip.z ? l_hip.z.toFixed(4) : 'N/A'}, vis:${l_hip.visibility ? l_hip.visibility.toFixed(4) : 'N/A'}`);
+                console.log(`L_Knee (25): x:${l_knee.x.toFixed(4)}, y:${l_knee.y.toFixed(4)}, z:${l_knee.z ? l_knee.z.toFixed(4) : 'N/A'}, vis:${l_knee.visibility ? l_knee.visibility.toFixed(4) : 'N/A'}`);
+                console.log(`L_Ankle (27): x:${l_ankle.x.toFixed(4)}, y:${l_ankle.y.toFixed(4)}, z:${l_ankle.z ? l_ankle.z.toFixed(4) : 'N/A'}, vis:${l_ankle.visibility ? l_ankle.visibility.toFixed(4) : 'N/A'}`);
+                console.groupEnd();
+            }
+
+            let l_hip_y_val = 0; // Default or simple mapping
+
+            const femurVec_L = create2DVector(l_hip, l_knee);
+            const tibiaVec_L = create2DVector(l_knee, l_ankle);
+
+            const currentKneeAngle_L = angleBetweenVectors(femurVec_L, tibiaVec_L);
+
+            const MAX_HUMAN_KNEE_BEND_RADIANS = 2.5; // Consistent with right leg
+
+            let l_knee_y_val = -(currentKneeAngle_L / MAX_HUMAN_KNEE_BEND_RADIANS) * 1.5;
+
+            l_knee_y_val = Math.max(-1.5, Math.min(0, l_knee_y_val));
+            l_knee_y_val = smooth('l_knee_y', l_knee_y_val);
+            this.viewer?.updateJoint('l_knee_y', l_knee_y_val);
+
+            this.viewer?.updateJoint('l_hip_y', l_hip_y_val);
+
+            if (this.debugMode) {
+                console.log('Left Leg Results (Smoothed):', {
+                    l_hip_y: l_hip_y_val.toFixed(3),
+                    l_knee_y: l_knee_y_val.toFixed(3),
+                    currentKneeAngle: (currentKneeAngle_L * 180 / Math.PI).toFixed(1) + '°'
+                });
+            }
         }
     }
     
