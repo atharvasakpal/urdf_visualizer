@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -159,7 +158,7 @@
             color: #6366f1;
         }
         
-        #loadButton {
+        #loadButton, #playVideoButton {
             width: 100%;
             padding: 14px 20px;
             background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
@@ -173,14 +172,15 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
             box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
+            margin-top: 10px; /* Added margin for separation */
         }
         
-        #loadButton:hover:not(:disabled) {
+        #loadButton:hover:not(:disabled), #playVideoButton:hover:not(:disabled) {
             box-shadow: 0 6px 30px rgba(99, 102, 241, 0.4);
             transform: translateY(-2px);
         }
         
-        #loadButton:disabled {
+        #loadButton:disabled, #playVideoButton:disabled {
             background: rgba(255, 255, 255, 0.1);
             cursor: not-allowed;
             box-shadow: none;
@@ -333,7 +333,7 @@
             #urdfCanvas {
         z-index: 10;
     }
-    #webcam {
+    #webcam, #uploadedVideo { /* Apply to both video elements */
         z-index: 1;
     }
         
@@ -472,7 +472,26 @@
             object-fit: cover;  /* Ensures the video fills the element while maintaining aspect ratio */
             transform: scaleX(-1); /* Flips the video horizontally to mirror the user */
             pointer-events: none; /* Allows mouse events to pass through to elements beneath */
+            display: block; /* Default to block, can be set to 'none' by JS */
         }
+
+        /* Styles for the uploaded video */
+        #uploadedVideo {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 240px;
+            height: 180px;
+            background-color: #000;
+            border: 2px solid #ffaa33; /* Different color for uploaded video border */
+            border-radius: 8px;
+            z-index: 1;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror for consistent user experience */
+            pointer-events: none;
+            display: none; /* Hidden by default */
+        }
+
 
         /* for mediapipe hands overlay */
         #overlay {
@@ -526,6 +545,29 @@
                 </div>
 
                 <div class="section">
+                    <div class="section-title">Video Input</div>
+
+                    <div class="file-input-group">
+                        <label>Upload Video File</label>
+                        <div class="file-input-wrapper" id="videoWrapper">
+                            <input type="file" id="videoInput" accept="video/*" />
+                            <div class="file-input-text">
+                                <strong>Click to select</strong> or drag video file here
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="playVideoButton" disabled>
+                        <span id="playVideoText">Play Video</span>
+                    </button>
+
+                     <button id="useWebcamButton">
+                        <span id="useWebcamText">Use Webcam</span>
+                    </button>
+
+                </div>
+
+                <div class="section">
                     <div class="section-title">View Options</div>
                     <div class="checkbox-group">
                         <div class="checkbox-item">
@@ -557,6 +599,7 @@
         <div id="viewport">
             <canvas id="urdfCanvas"></canvas>
             <video id="webcam" autoplay playsinline></video>
+            <video id="uploadedVideo" autoplay playsinline loop style="display: none;"></video>
             <canvas id="overlay"></canvas>
             
 

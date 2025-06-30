@@ -3,13 +3,24 @@
 import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js";
 
 export class MediaPipeHandController { // Consider renaming this to MediaPipePoseController for clarity
-    constructor(viewerInstance, videoElement) {
+    constructor(viewerInstance, webcamElement) {
         this.viewer = viewerInstance;
-        this.video = videoElement;
+        this.webcamElement = webcamElement; // The original webcam video element
+        this.uploadedVideoElement = document.getElementById('uploadedVideo'); // New: Reference to uploaded video element
+        this.videoInput = document.getElementById('videoInput'); // New: Reference to video file input
+        this.playVideoButton = document.getElementById('playVideoButton'); // New: Reference to play video button
+        this.useWebcamButton = document.getElementById('useWebcamButton'); // New: Reference to use webcam button
+        this.videoWrapper = document.getElementById('videoWrapper'); // New: Reference to video input wrapper
+
+        this.currentVideoSource = 'webcam'; // 'webcam' or 'uploaded'
+        this.video = this.webcamElement; // This will point to the active video source
+
         this.poseLandmarker = null;
         this.runningMode = "VIDEO";
         this.webcamInitialized = false;
         this.lastVideoTime = -1;
+        this.animationFrameId = null; // To store the ID of the requestAnimationFrame
+        this.videoStream = null; // To store the webcam stream for stopping it
 
         // Store previous joint values for smoothing
         this.previousJointValues = {};
@@ -26,7 +37,11 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
             'r_arm_z': 0,
             'r_elbow_y': -0.02, // Straight position for right elbow
             'head_z': 0,
-            'head_y': 0
+            'head_y': 0,
+            'r_hip_y': 0, // Added for right leg
+            'r_knee_y': 0, // Added for right leg
+            'l_hip_y': 0, // Added for left leg
+            'l_knee_y': 0  // Added for left leg
         };
 
         // History for arm length for foreshortening detection
@@ -34,6 +49,7 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
         this.armLengthHistory_R = [];
 
         this.initMediaPipe();
+        this.addEventListeners(); // New: Call to add event listeners
     }
 
     async initMediaPipe() {
@@ -51,23 +67,116 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
         });
 
         console.log("MediaPipe PoseLandmarker initialized.");
-        this.setupWebcam();
+        this.setupWebcam(); // Start with webcam by default
     }
 
+    addEventListeners() {
+        // Handle URDF viewer events (if any, not directly related to mediapipe control)
+        // For video upload
+        this.videoInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                this.uploadedVideoElement.src = URL.createObjectURL(file);
+                this.playVideoButton.disabled = false;
+                this.videoWrapper.classList.add('has-files');
+                this.viewer.updateStatus(`Video '${file.name}' loaded. Click Play Video.`, 'success');
+            } else {
+                this.playVideoButton.disabled = true;
+                this.videoWrapper.classList.remove('has-files');
+                this.viewer.updateStatus('No video file selected.', 'error');
+            }
+        });
+
+        this.playVideoButton.addEventListener('click', () => {
+            if (this.uploadedVideoElement.src) {
+                this.stopCurrentVideoSource();
+                this.currentVideoSource = 'uploaded';
+                this.video = this.uploadedVideoElement;
+                this.webcamElement.style.display = 'none';
+                this.uploadedVideoElement.style.display = 'block';
+                this.uploadedVideoElement.play();
+                this.viewer.updateStatus('Playing uploaded video...', 'loading');
+                this.detectPosesInRealTime(); // Start detection for video
+            }
+        });
+
+        this.uploadedVideoElement.addEventListener('play', () => {
+            this.viewer.updateStatus('Video playing, mimicking motion.', 'success');
+        });
+
+        this.uploadedVideoElement.addEventListener('ended', () => {
+            this.viewer.updateStatus('Video finished. Resetting robot.', 'success');
+            this.resetRobotToInitialPose();
+            this.drawLandmarks([]); // Clear overlay
+            // Optionally, switch back to webcam or remain paused
+            // this.setupWebcam(); 
+        });
+
+        this.uploadedVideoElement.addEventListener('pause', () => {
+            this.viewer.updateStatus('Video paused.', 'loading');
+        });
+
+        this.uploadedVideoElement.addEventListener('error', (e) => {
+            console.error('Error playing uploaded video:', e);
+            this.viewer.updateStatus('Error playing video. Try another file.', 'error');
+            this.resetRobotToInitialPose();
+        });
+
+
+        this.useWebcamButton.addEventListener('click', () => {
+            this.stopCurrentVideoSource();
+            this.currentVideoSource = 'webcam';
+            this.video = this.webcamElement;
+            this.uploadedVideoElement.style.display = 'none';
+            this.webcamElement.style.display = 'block';
+            this.setupWebcam(); // Re-initialize webcam
+            this.viewer.updateStatus('Switching to webcam...', 'loading');
+        });
+    }
+
+    stopCurrentVideoSource() {
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+
+        if (this.currentVideoSource === 'webcam' && this.videoStream) {
+            this.videoStream.getTracks().forEach(track => track.stop());
+            this.webcamElement.srcObject = null;
+            this.webcamInitialized = false;
+        } else if (this.currentVideoSource === 'uploaded' && !this.uploadedVideoElement.paused) {
+            this.uploadedVideoElement.pause();
+            this.uploadedVideoElement.currentTime = 0; // Reset video to start
+        }
+        this.resetRobotToInitialPose(); // Reset robot pose when switching/stopping
+        this.drawLandmarks([]); // Clear overlay
+    }
+
+
     setupWebcam() {
+        if (this.webcamInitialized && this.video.srcObject) { // Already initialized and running
+            console.log("Webcam already initialized.");
+            this.viewer.updateStatus("Webcam active. Mimicking motion.", 'success');
+            if (!this.animationFrameId) { // Ensure detection loop is running
+                this.detectPosesInRealTime();
+            }
+            return;
+        }
+
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             navigator.mediaDevices.getUserMedia({ video: true })
                 .then((stream) => {
-                    this.video.srcObject = stream;
-                    this.video.addEventListener("canplay", () => {
-                        this.video.play();
-
+                    this.videoStream = stream; // Store the stream
+                    this.webcamElement.srcObject = stream;
+                    this.webcamElement.addEventListener("canplay", () => {
+                        this.webcamElement.play(); // Ensure webcam video plays
                         this.overlayCanvas = document.getElementById("overlay");
-                        this.overlayCanvas.width = this.video.videoWidth;
-                        this.overlayCanvas.height = this.video.videoHeight;
+                        this.overlayCanvas.width = this.webcamElement.videoWidth;
+                        this.overlayCanvas.height = this.webcamElement.videoHeight;
                         this.overlayCtx = this.overlayCanvas.getContext("2d");
 
                         this.webcamInitialized = true;
+                        this.viewer.updateStatus("Webcam stream started. Starting pose detection.", 'success');
                         console.log("Webcam stream started. Starting pose detection loop.");
                         this.detectPosesInRealTime();
                     }, { once: true });
@@ -82,37 +191,46 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
     }
 
     async detectPosesInRealTime() {
-        if (this.webcamInitialized && this.poseLandmarker) {
+        if (this.video.paused || this.video.ended) {
+            // Stop processing if video is paused or ended
+            this.animationFrameId = null;
+            return;
+        }
+
+        // Only detect if video (webcam or uploaded) is ready and has new frame
+        if (this.videoInitialized && this.video.currentTime !== this.lastVideoTime) { // Check this.videoInitialized
+            this.lastVideoTime = this.video.currentTime;
+            
+            // Check if the video element has valid dimensions before proceeding
+            if (this.video.videoWidth === 0 || this.video.videoHeight === 0) {
+                if (this.debugMode) console.log("Video element has zero dimensions, skipping detection.");
+                this.animationFrameId = requestAnimationFrame(this.detectPosesInRealTime.bind(this));
+                return;
+            }
+
             const startTimeMs = performance.now();
 
             try {
-                // Only detect if video has new frame
-                if (this.video.currentTime !== this.lastVideoTime) {
-                    this.lastVideoTime = this.video.currentTime;
-                    const result = await this.poseLandmarker.detectForVideo(this.video, startTimeMs);
+                const result = await this.poseLandmarker.detectForVideo(this.video, startTimeMs);
 
-                    if (result.landmarks && result.landmarks.length > 0) {
-                        const poseLandmarks = result.landmarks[0];
-                        
-                        // NEW: Check if the full human body is visible
-                        if (this.isFullBodyVisible(poseLandmarks)) {
-                            this.mapLandmarksToRobot(poseLandmarks);
-                            this.drawLandmarks(poseLandmarks); // Draw detected pose
-                        } else {
-                            // If partial body or not visible enough, reset robot to initial pose
-                            if (this.debugMode) console.log('Partial body detected or not visible enough. Resetting to initial pose.');
-                            this.resetRobotToInitialPose();
-                            this.drawLandmarks(poseLandmarks); // Still draw detected landmarks for feedback
-                        }
+                if (result.landmarks && result.landmarks.length > 0) {
+                    const poseLandmarks = result.landmarks[0];
+                    
+                    // NEW: Check if the full human body is visible
+                    if (this.isFullBodyVisible(poseLandmarks)) {
+                        this.mapLandmarksToRobot(poseLandmarks);
+                        this.drawLandmarks(poseLandmarks); // Draw detected pose
                     } else {
-                        // No landmarks detected at all
-                        if (this.debugMode) console.log('No pose landmarks detected. Resetting to initial pose.');
+                        // If partial body or not visible enough, reset robot to initial pose
+                        if (this.debugMode) console.log('Partial body detected or not visible enough. Resetting to initial pose.');
                         this.resetRobotToInitialPose();
-                        this.drawLandmarks([]); // Clear overlay if no pose
+                        this.drawLandmarks(poseLandmarks); // Still draw detected landmarks for feedback
                     }
                 } else {
-                    // No new video frame
-                    this.drawLandmarks([]); // Clear overlay if video is paused/no new frame
+                    // No landmarks detected at all
+                    if (this.debugMode) console.log('No pose landmarks detected. Resetting to initial pose.');
+                    this.resetRobotToInitialPose();
+                    this.drawLandmarks([]); // Clear overlay if no pose
                 }
             } catch (error) {
                 console.error("Pose detection error:", error);
@@ -120,8 +238,21 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
                 this.resetRobotToInitialPose();
                 this.drawLandmarks([]);
             }
+        } else if (!this.videoInitialized && this.video.readyState >= 2) { // Check if video is ready to play
+            this.overlayCanvas = document.getElementById("overlay");
+            this.overlayCanvas.width = this.video.videoWidth;
+            this.overlayCanvas.height = this.video.videoHeight;
+            this.overlayCtx = this.overlayCanvas.getContext("2d");
+            this.videoInitialized = true; // Mark as initialized
+            if (this.debugMode) console.log("Video element dimensions updated for overlay.");
+        } else {
+            // No new video frame or video not ready, but we still want to keep the loop going
+            if (this.debugMode) console.log("No new video frame or video not ready.");
+            if (this.video.paused) {
+                 this.drawLandmarks([]); // Clear overlay if paused
+            }
         }
-        requestAnimationFrame(this.detectPosesInRealTime.bind(this));
+        this.animationFrameId = requestAnimationFrame(this.detectPosesInRealTime.bind(this));
     }
 
     /**
@@ -202,6 +333,10 @@ export class MediaPipeHandController { // Consider renaming this to MediaPipePos
     }
 
     drawLandmarks(landmarks) {
+        if (!this.overlayCtx || !this.overlayCanvas) {
+            if (this.debugMode) console.warn("Overlay canvas not initialized for drawing.");
+            return;
+        }
         this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
 
         if (landmarks.length === 0) { // If no landmarks, just clear and return
