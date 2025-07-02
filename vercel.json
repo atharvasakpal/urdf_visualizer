@@ -2,7 +2,7 @@
     "rewrites": [
       {
         "source": "/hands",
-        "destination": "test.html"
+        "destination": "./test.html"
       }
     ]
   }
