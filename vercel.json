@@ -1,11 +1,11 @@
 {
     "rewrites": [
       {
-        "source": "/hand",
+        "source": "/hand_viewer",
         "destination": "/src/hand_viewer/test.html"
       },
       {
-        "source": "/humanoid",
+        "source": "/humanoid_viewer",
         "destination": "/src/humanoid_viewer/index.html"
       },
       {
