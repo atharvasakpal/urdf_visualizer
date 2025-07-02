@@ -1,27 +1,8 @@
 {
     "rewrites": [
       {
-        "source": "/hand_viewer",
-        "destination": "/src/hand_viewer/test.html"
-      },
-      {
-        "source": "/humanoid_viewer",
-        "destination": "/src/humanoid_viewer/index.html"
-      },
-      {
-        "source": "/",
-        "destination": "/src/humanoid_viewer/index.html"
-      }
-    ],
-    "headers": [
-      {
-        "source": "/src/(.*)",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "public, max-age=0, must-revalidate"
-          }
-        ]
+        "source": "/hands",
+        "destination": "test.html"
       }
     ]
   }
