@@ -118,28 +118,6 @@ npm run preview
    - Enable webcam for teleoperation (supported models only)
    - Set IK targets for automatic positioning
 
-## 📁 Project Structure
-
-```
-urdf_visualizer/
-├── src/
-│   ├── js/
-│   │   ├── urdf-parser.js      # URDF file parsing logic
-│   │   ├── three-scene.js      # Three.js scene management
-│   │   ├── mediapipe-handler.js # Pose detection integration
-│   │   ├── ik-solver.js        # Inverse kinematics algorithms
-│   │   └── robot-controllers/  # Robot-specific control mappings
-│   │       ├── poppy-humanoid.js
-│   │       └── allegro-hand.js
-│   ├── css/
-│   │   └── styles.css          # Application styling
-│   └── assets/
-│       └── models/             # Sample URDF models
-├── public/
-│   └── index.html              # Main HTML file
-├── package.json                # Dependencies and scripts
-└── vite.config.js             # Vite configuration
-```
 
 ## 🎮 Usage Guide
 
