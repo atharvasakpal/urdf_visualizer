@@ -12,11 +12,15 @@ This project provides a comprehensive web-based solution for robotics visualizat
 
 ### 📸 Screenshots
 
-| Main Interface | Teleoperation | Inverse Kinematics |
-|----------------|---------------|-------------------|
-| ![Main Interface](./images/main-interface.png) | ![Teleoperation](./images/teleoperation-demo.gif) | ![IK Solver](./images/ik-demo.gif) |
+| Main Interface | 
+|----------------|
+| ![Main Interface](./images/img1.png)|
+| ![Main Interface](./images/img2.png)|
 
-> **📹 [Watch Full Demo Video](https://your-demo-video-link.com)**
+|Teleoperation |
+|---------------|
+| ![Teleoperation](./images/img3.png)|
+
 
 ## ✨ Key Features
 
@@ -53,19 +57,16 @@ Experience the visualizer at: **[robotmanipulator.vercel.app](https://robotmanip
 ### ✅ Full Teleoperation Support
 
 #### Poppy Humanoid
-![Poppy Humanoid](./images/poppy-humanoid-demo.gif)
 - **Complete body pose mapping**
 - **Real-time joint control**
 - **Natural gesture recognition**
 
 #### Allegro Hand
-![Allegro Hand](./images/allegro-hand-demo.gif)
 - **Finger and hand gesture control**
 - **Precision grip simulation**
 - **Hand landmark tracking**
 
 ### 🔧 Manual Control + IK Support
-![Various Robot Models](./images/robot-models-showcase.png)
 - **Universal**: All URDF-compliant robot models
 - **Robotic Arms**: Manipulator arms with joint control
 - **Mobile Robots**: Wheeled and tracked vehicles
@@ -144,7 +145,6 @@ urdf_visualizer/
 
 ### Loading Robot Models
 
-![Drag and Drop Demo](./images/drag-drop-demo.gif)
 
 1. **Drag and Drop Method**:
    - Drag `.urdf`, `.dae`, or `.stl` files directly into the browser
@@ -158,20 +158,17 @@ urdf_visualizer/
 ### Control Methods
 
 #### Manual Control
-![Manual Control Interface](./images/manual-control.png)
 - **Joint Sliders**: Adjust individual joint angles
 - **Real-time Updates**: See changes instantly in 3D view
 - **Range Limits**: Automatic joint limit enforcement
 
 #### Teleoperation (Supported Models)
-![Teleoperation Setup](./images/teleoperation-setup.png)
 1. **Enable Camera**: Click "Start Teleoperation"
 2. **Grant Permissions**: Allow browser camera access
 3. **Pose Detection**: Position yourself in camera view
 4. **Real-time Control**: Your movements control the robot
 
 #### Inverse Kinematics
-![IK Target Setting](./images/ik-target-demo.gif)
 1. **Set Target**: Click in 3D space or use coordinate inputs
 2. **Compute IK**: Algorithm calculates required joint angles
 3. **Smooth Animation**: Watch robot move to target position
